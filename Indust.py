@@ -1,28 +1,26 @@
-import math
-
 import matplotlib
+
+matplotlib.use("module://matplotlib-backend-kitty")
 import matplotlib.pyplot as plt
-
-matplotlib.use("Agg")
 import numpy as np
+import pandas as pd
 
-PRINT = 250
-EPOCHS = 30000
-INPUT_SIZE = 1000
-VALIDATION_SIZE = 300
-TESTING_SIZE = 100
+# Constants
+ANN_MODEL = [4, 10, 10, 10, 1]
+EPOCHS = 500
+BATCH_SIZE = 128
+LEARNING_RATE = 0.001
+PRINT = 50
 NORMALIZE_TO = 1
-ANN_MODEL = [1, 15, 15, 15, 1]
-BATCH_SIZE = 64
-ACTIVATION_FUNCTION = "tanh"
+ACTIVATION_FUNCTION = "relu"
 COST_FUNCTION = "MSE"
-LEARNING_RATE = 0.0005
 
-OPTIMIZER = "rmsprop"
+OPTIMIZER = "adam"
 BETA = 0.9
 BETA2 = 0.999
 EPSILON = 1e-8
-LAMBDA = 0.001
+LAMBDA = 0.01
+DECAY_RATE = 0.001  # Continuous decay rate
 
 
 def Cal_Activation_func(X, func):
@@ -48,13 +46,13 @@ def Dif_Activation(X, func):
 
 
 def Cost_func(X, Y, func):
-
     if func == "MSE":
         return np.mean((X - Y) ** 2)
 
 
 def lr_schedule(epoch, initial_lr):
-    return initial_lr * (0.04 ** (epoch // (EPOCHS // 3)))
+    # Continuous learning rate decay
+    return initial_lr / (1 + DECAY_RATE * epoch)
 
 
 class NeuralNetwork:
@@ -69,19 +67,19 @@ class NeuralNetwork:
         self.beta2 = BETA2
         self.epsilon = EPSILON
         self.lambda_reg = LAMBDA
+        self.t = 0  # Adam timestep
 
         for i in range(self.num_layers - 1):
-            # Xavier/Glorot initialization for weights
-            limit = np.sqrt(6 / (self.architecture[i] + self.architecture[i + 1]))
+            # He initialization for ReLU activations
+            limit = np.sqrt(2 / self.architecture[i])
             self.weights.append(
                 np.random.uniform(
                     -limit, limit, (self.architecture[i + 1], self.architecture[i])
                 )
             )
-            # Initialize biases with small random values
             self.biases.append(np.random.randn(self.architecture[i + 1], 1) * 0.01)
 
-        # Initialize optimizer-related variables (v and s) here as before
+        # Initialize moment estimates for Adam/RMSprop/SGD with momentum
         self.v_weights = [np.zeros_like(w) for w in self.weights]
         self.v_biases = [np.zeros_like(b) for b in self.biases]
         self.s_weights = [np.zeros_like(w) for w in self.weights]
@@ -91,8 +89,8 @@ class NeuralNetwork:
         self.activation = [X]
         for i in range(self.num_layers - 1):
             Z = np.dot(self.weights[i], self.activation[-1]) + self.biases[i]
-            if i == self.num_layers - 2:  # Last layer
-                A = Z  # Linear activation for output layer
+            if i == self.num_layers - 2:  # Last layer (output layer)
+                A = Z  # Linear activation for regression
             else:
                 A = Cal_Activation_func(Z, activation_func)
             self.activation.append(A)
@@ -100,7 +98,7 @@ class NeuralNetwork:
 
     def backward_prop(self, Y, activation_func, cost_function):
         m = Y.shape[1]
-        Y = Y.reshape(self.activation[-1].shape)
+        Y = Y.reshape(self.activation[-1].shape)  # Ensure the shapes match
 
         dZ = self.activation[-1] - Y
         dW = [np.zeros_like(w) for w in self.weights]
@@ -118,7 +116,7 @@ class NeuralNetwork:
 
         self.optimize(dW, db)
 
-        # Regularization
+        # Calculate cost and include L2 regularization term
         cost = Cost_func(self.activation[-1], Y, cost_function) + (
             self.lambda_reg / (2 * m)
         ) * sum(np.sum(w**2) for w in self.weights)
@@ -132,7 +130,6 @@ class NeuralNetwork:
         elif self.optimizer == "adam":
             self.adam(dW, db)
 
-    # Momentum
     def sgd_momentum(self, dW, db):
         for i in range(len(self.weights)):
             self.v_weights[i] = self.beta * self.v_weights[i] + (1 - self.beta) * dW[i]
@@ -158,6 +155,7 @@ class NeuralNetwork:
             ) * db[i]
 
     def adam(self, dW, db):
+        self.t += 1  # Increment the timestep for bias correction
         for i in range(len(self.weights)):
             self.v_weights[i] = self.beta * self.v_weights[i] + (1 - self.beta) * dW[i]
             self.v_biases[i] = self.beta * self.v_biases[i] + (1 - self.beta) * db[i]
@@ -169,11 +167,11 @@ class NeuralNetwork:
                 db[i] ** 2
             )
 
-            v_weights_corrected = self.v_weights[i] / (1 - self.beta)
-            v_biases_corrected = self.v_biases[i] / (1 - self.beta)
+            v_weights_corrected = self.v_weights[i] / (1 - self.beta**self.t)
+            v_biases_corrected = self.v_biases[i] / (1 - self.beta**self.t)
 
-            s_weights_corrected = self.s_weights[i] / (1 - self.beta2)
-            s_biases_corrected = self.s_biases[i] / (1 - self.beta2)
+            s_weights_corrected = self.s_weights[i] / (1 - self.beta2**self.t)
+            s_biases_corrected = self.s_biases[i] / (1 - self.beta2**self.t)
 
             self.weights[i] -= (
                 self.learning_rate / (np.sqrt(s_weights_corrected + self.epsilon))
@@ -184,117 +182,115 @@ class NeuralNetwork:
 
 
 def main():
-    # Initialization of the input, output and validation array
-    X_input = np.linspace(-2 * math.pi, 2 * math.pi, INPUT_SIZE)
-    Y_output = np.sin(X_input)
+    # Load data from the .ods file
+    data = pd.read_excel(
+        "CCPP/data.ods", engine="odf", sheet_name=0
+    )  # Using the first sheet
 
-    # Validation set
-    VALIDATION_set = np.random.uniform(
-        low=(-2 * math.pi), high=(2 * math.pi), size=VALIDATION_SIZE
+    # Separate features (X) and target (Y)
+    X = data.iloc[:, : ANN_MODEL[0]].values.T  # Shape: (4, num_samples)
+    Y = data.iloc[:, ANN_MODEL[0]].values.reshape(1, -1)  # Shape: (1, num_samples)
+
+    # Data splitting (72:18:10 for training:validation:testing)
+    total_samples = X.shape[1]
+    test_size = int(0.1 * total_samples)
+    val_size = int(0.18 * total_samples)
+    train_size = total_samples - test_size - val_size
+
+    # Shuffle the data
+    indices = np.arange(total_samples)
+    np.random.shuffle(indices)
+    X = X[:, indices]
+    Y = Y[:, indices]
+
+    # Split the data
+    X_train, X_val, X_test = (
+        X[:, :train_size],
+        X[:, train_size : train_size + val_size],
+        X[:, -test_size:],
+    )
+    Y_train, Y_val, Y_test = (
+        Y[:, :train_size],
+        Y[:, train_size : train_size + val_size],
+        Y[:, -test_size:],
     )
 
-    # Normalization
-    X_input_min, X_input_max = np.min(X_input), np.max(X_input)
-    X_input_normalized = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
-        (X_input - X_input_min) / (X_input_max - X_input_min)
+    # Normalization for input and output
+    X_min, X_max = np.min(X_train, axis=1, keepdims=True), np.max(
+        X_train, axis=1, keepdims=True
+    )
+    Y_min, Y_max = np.min(Y_train), np.max(Y_train)
+
+    X_train_norm = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
+        (X_train - X_min) / (X_max - X_min)
+    ) + (-NORMALIZE_TO)
+    X_val_norm = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
+        (X_val - X_min) / (X_max - X_min)
+    ) + (-NORMALIZE_TO)
+    Y_train_norm = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
+        (Y_train - Y_min) / (Y_max - Y_min)
+    ) + (-NORMALIZE_TO)
+    Y_val_norm = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
+        (Y_val - Y_min) / (Y_max - Y_min)
     ) + (-NORMALIZE_TO)
 
-    Y_output_min, Y_output_max = np.min(Y_output), np.max(Y_output)
-    Y_output_normalized = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
-        (Y_output - Y_output_min) / (Y_output_max - Y_output_min)
-    ) + (-NORMALIZE_TO)
+    # Initialize model
+    model = NeuralNetwork(ANN_MODEL)
+    costs = []  # To store training costs
+    val_costs = []  # To store validation costs
 
-    X_input_normalized = X_input_normalized.reshape(1, -1)  # Shape: (1, num_samples)
-    Y_output_normalized = Y_output_normalized.reshape(1, -1)  # Shape: (1, num_samples)
-
-    # Normalize validation set
-    VALIDATION_set_normalized = (NORMALIZE_TO - (-NORMALIZE_TO)) * (
-        (VALIDATION_set - X_input_min) / (X_input_max - X_input_min)
-    ) + (-NORMALIZE_TO)
-    VALIDATION_set_normalized = VALIDATION_set_normalized.reshape(
-        1, -1
-    )  # Shape: (1, VALIDATION_SIZE)
-
-    ann = NeuralNetwork(ANN_MODEL)
-
-    costs = []  # List to store cost values
-
-    # Batch training
-    for i in range(EPOCHS):
+    # Training loop with batch processing and validation
+    for epoch in range(EPOCHS):
         epoch_cost = 0
-        for j in range(0, INPUT_SIZE, BATCH_SIZE):
-            end = min(j + BATCH_SIZE, INPUT_SIZE)
-            X_batch = X_input_normalized[:, j:end]
-            Y_batch = Y_output_normalized[:, j:end]
+        for j in range(0, train_size, BATCH_SIZE):
+            end = min(j + BATCH_SIZE, train_size)
+            X_batch = X_train_norm[:, j:end]
+            Y_batch = Y_train_norm[:, j:end]
 
-            # Forward Propagation
-            ann.forward_prop(X_batch, ACTIVATION_FUNCTION)
-
-            # Backward Propagation
-            batch_cost = ann.backward_prop(Y_batch, ACTIVATION_FUNCTION, COST_FUNCTION)
+            # Forward and Backward Propagation
+            model.forward_prop(X_batch, ACTIVATION_FUNCTION)
+            batch_cost = model.backward_prop(
+                Y_batch, ACTIVATION_FUNCTION, COST_FUNCTION
+            )
             epoch_cost += batch_cost
 
-            ann.learning_rate = lr_schedule(i, LEARNING_RATE)
+        # Calculate full training cost for the entire epoch (not just batches)
+        train_output = model.forward_prop(X_train_norm, ACTIVATION_FUNCTION)
+        train_cost = Cost_func(train_output, Y_train_norm, COST_FUNCTION)
+        costs.append(train_cost)  # Append full training cost
 
-        # Calculate average cost for the entire epoch
-        epoch_cost /= INPUT_SIZE // BATCH_SIZE
-        costs.append(epoch_cost)
+        # Validation cost (without regularization)
+        val_output = model.forward_prop(X_val_norm, ACTIVATION_FUNCTION)
+        val_cost = Cost_func(val_output, Y_val_norm, COST_FUNCTION)
+        val_costs.append(val_cost)
 
-        if i % PRINT == 0:
-            print(f"EPOCH {i}, Cost function = {epoch_cost}")
+        # Print progress every PRINT epochs
+        if epoch % PRINT == 0:
+            print(f"Epoch {epoch}/{EPOCHS} - Cost: {train_cost}, Val Cost: {val_cost}")
 
-    # Plotting the cost function
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(EPOCHS), costs)
-    plt.title("Cost Function over Epochs")
-    plt.xlabel("Epoch")
-    plt.ylabel("Cost")
-    plt.grid(True)
-    plt.savefig("cost_over_epochs.png")
-    print("Plot saved as 'cost_over_epochs.png'")
+        # # Early stopping if validation cost increases
+        # if epoch > 0 and val_costs[-1] - val_costs[-2] < 5e-1:
+        #     print(f"Early stopping at epoch {epoch} due to increasing validation cost.")
+        #     break
 
-    # Forward pass for validation set
-    val_forward = ann.forward_prop(VALIDATION_set_normalized, ACTIVATION_FUNCTION)
+        # Shuffle training data at the start of each epoch
+        indices = np.arange(train_size)
+        np.random.shuffle(indices)
+        X_train_norm = X_train_norm[:, indices]
+        Y_train_norm = Y_train_norm[:, indices]
 
-    # Denormalize the validation set input and predictions
-    VALIDATION_set_denorm = (VALIDATION_set_normalized - (-NORMALIZE_TO)) * (
-        X_input_max - X_input_min
-    ) / (2 * NORMALIZE_TO) + X_input_min
-    val_forward_denorm = (val_forward - (-NORMALIZE_TO)) * (
-        Y_output_max - Y_output_min
-    ) / (2 * NORMALIZE_TO) + Y_output_min
+        # Update learning rate with decay
+        model.learning_rate = lr_schedule(epoch, LEARNING_RATE)
 
-    # Sort validation set for proper line plot
-    sort_indices = np.argsort(VALIDATION_set_denorm.flatten())
-    VALIDATION_set_denorm = VALIDATION_set_denorm.flatten()[sort_indices]
-    val_forward_denorm = val_forward_denorm.flatten()[sort_indices]
-
-    plt.figure(figsize=(12, 8))
-
-    # Plot original sin wave
-    plt.plot(X_input, Y_output, label="True Sin(x)", color="blue")
-
-    # Plot validation set prediction
-    plt.scatter(
-        VALIDATION_set_denorm,
-        val_forward_denorm,
-        color="red",
-        s=20,
-        alpha=0.6,
-        label="ANN Prediction",
-    )
-
-    plt.title("Sin() Wave and ANN Prediction")
-    plt.xlabel("x")
-    plt.ylabel("Sin(x)")
-    plt.grid(True)
-    plt.axhline(y=0, color="k", linestyle="--")
-    plt.axvline(x=0, color="k", linestyle="--")
+    # Plot the cost over epochs with log scale
+    plt.plot(costs, label="Training Cost")
+    plt.plot(val_costs, label="Validation Cost")
+    plt.xlabel("Epochs")
+    plt.ylabel("Cost (Log Scale)")
+    plt.yscale("log")  # Set y-axis to log scale
     plt.legend()
-
-    plt.savefig("sin_wave_with_prediction.png")
-    print("Plot saved as 'sin_wave_with_prediction.png'")
     plt.show()
+    plt.savefig("Val_vs_Train_cost.png")
 
 
 if __name__ == "__main__":
