@@ -1,3 +1,5 @@
+import json
+
 import matplotlib
 
 matplotlib.use("module://matplotlib-backend-kitty")
@@ -21,6 +23,8 @@ BETA2 = 0.999
 EPSILON = 1e-8
 LAMBDA = 0.01
 DECAY_RATE = 0.001  # Continuous decay rate
+
+PATIENCE = 100
 
 
 def Cal_Activation_func(X, func):
@@ -48,11 +52,18 @@ def Dif_Activation(X, func):
 def Cost_func(X, Y, func):
     if func == "MSE":
         return np.mean((X - Y) ** 2)
+    elif func == "MAPE":
+        return (1 / BATCH_SIZE) * (np.mean((abs(X - Y) * 100) / abs(Y) + 0.001))
 
 
 def lr_schedule(epoch, initial_lr):
     # Continuous learning rate decay
     return initial_lr / (1 + DECAY_RATE * epoch)
+
+
+def save_data(filename, **kwargs):
+    with open(filename, "wb") as f:
+        np.savez(f, **kwargs)
 
 
 class NeuralNetwork:
@@ -180,6 +191,14 @@ class NeuralNetwork:
                 self.learning_rate / (np.sqrt(s_biases_corrected + self.epsilon))
             ) * v_biases_corrected
 
+    def save_weights(self, filename):
+        weights_data = {
+            "weights": [w.tolist() for w in self.weights],
+            "biases": [b.tolist() for b in self.biases],
+        }
+        with open(filename, "w") as f:
+            json.dump(weights_data, f)
+
 
 def main():
     # Load data from the .ods file
@@ -194,26 +213,42 @@ def main():
     # Data splitting (72:18:10 for training:validation:testing)
     total_samples = X.shape[1]
     test_size = int(0.1 * total_samples)
-    val_size = int(0.18 * total_samples)
-    train_size = total_samples - test_size - val_size
+    remaining_size = total_samples - test_size  # This will be split into 72:18
+    val_size = int(0.18 * total_samples)  # 18% of total samples for validation
+    train_size = remaining_size - val_size
 
-    # Shuffle the data
-    indices = np.arange(total_samples)
+    # Split the data for test (last 10% chunk without shuffling)
+    X_test, Y_test = X[:, -test_size:], Y[:, -test_size:]
+
+    # Remaining data (90%) for training and validation
+    X_remaining, Y_remaining = X[:, :-test_size], Y[:, :-test_size]
+
+    # Shuffle the remaining data
+    indices = np.arange(remaining_size)
     np.random.shuffle(indices)
-    X = X[:, indices]
-    Y = Y[:, indices]
+    X_remaining = X_remaining[:, indices]
+    Y_remaining = Y_remaining[:, indices]
 
-    # Split the data
-    X_train, X_val, X_test = (
-        X[:, :train_size],
-        X[:, train_size : train_size + val_size],
-        X[:, -test_size:],
-    )
-    Y_train, Y_val, Y_test = (
-        Y[:, :train_size],
-        Y[:, train_size : train_size + val_size],
-        Y[:, -test_size:],
-    )
+    # Initialize arrays for training and validation data
+    X_train = []
+    X_val = []
+    Y_train = []
+    Y_val = []
+
+    # Interspersing validation data (indices divisible by 5 go to validation)
+    for i in range(remaining_size):
+        if i % 5 == 0 and len(X_val) < val_size:
+            X_val.append(X_remaining[:, i])
+            Y_val.append(Y_remaining[:, i])
+        else:
+            X_train.append(X_remaining[:, i])
+            Y_train.append(Y_remaining[:, i])
+
+    # Convert lists back to numpy arrays
+    X_train = np.array(X_train).T
+    Y_train = np.array(Y_train).T
+    X_val = np.array(X_val).T
+    Y_val = np.array(Y_val).T
 
     # Normalization for input and output
     X_min, X_max = np.min(X_train, axis=1, keepdims=True), np.max(
@@ -234,6 +269,20 @@ def main():
         (Y_val - Y_min) / (Y_max - Y_min)
     ) + (-NORMALIZE_TO)
 
+    # Save the datasets and normalization parameters
+    save_data(
+        "datasets.npz",
+        X_train=X_train,
+        Y_train=Y_train,
+        X_val=X_val,
+        Y_val=Y_val,
+        X_test=X_test,
+        Y_test=Y_test,
+        X_min=X_min,
+        X_max=X_max,
+        Y_min=Y_min,
+        Y_max=Y_max,
+    )
     # Initialize model
     model = NeuralNetwork(ANN_MODEL)
     costs = []  # To store training costs
@@ -268,10 +317,73 @@ def main():
         if epoch % PRINT == 0:
             print(f"Epoch {epoch}/{EPOCHS} - Cost: {train_cost}, Val Cost: {val_cost}")
 
-        # # Early stopping if validation cost increases
-        # if epoch > 0 and val_costs[-1] - val_costs[-2] < 5e-1:
-        #     print(f"Early stopping at epoch {epoch} due to increasing validation cost.")
-        #     break
+        # Shuffle training data at the start of each epoch
+        indices = np.arange(train_size)
+        np.random.shuffle(indices)
+        X_train_norm = X_train_norm[:, indices]
+        Y_train_norm = Y_train_norm[:, indices]
+
+        # Update learning rate with decay
+        model.learning_rate = lr_schedule(epoch, LEARNING_RATE)
+
+    # Plot the cost over epochs with log scale
+    plt.plot(costs, label="Training Cost")
+    plt.plot(val_costs, label="Validation Cost")
+    plt.xlabel("Epochs")
+    plt.ylabel("Cost (Log Scale)")
+    plt.yscale("log")  # Set y-axis to log scale
+    plt.legend()
+    plt.title("Val_vs_Train_cost")
+    plt.show()
+    plt.savefig("Val_vs_Train_cost(MSE).png")
+
+    model = NeuralNetwork(ANN_MODEL)
+    costs = []  # To store training costs
+    val_costs = []  # To store validation costs
+    best_val_cost = float("inf")
+    wait = 0
+    best_epoch = 0
+
+    # Training loop with batch processing and validation
+    for epoch in range(EPOCHS):
+        epoch_cost = 0
+        for j in range(0, train_size, BATCH_SIZE):
+            end = min(j + BATCH_SIZE, train_size)
+            X_batch = X_train_norm[:, j:end]
+            Y_batch = Y_train_norm[:, j:end]
+            # Forward and Backward Propagation
+            model.forward_prop(X_batch, ACTIVATION_FUNCTION)
+            batch_cost = model.backward_prop(
+                Y_batch, ACTIVATION_FUNCTION, COST_FUNCTION
+            )
+            epoch_cost += batch_cost
+
+        # Calculate full training cost for the entire epoch (not just batches)
+        train_output = model.forward_prop(X_train_norm, ACTIVATION_FUNCTION)
+        train_cost = Cost_func(train_output, Y_train_norm, "MAPE")
+        costs.append(train_cost)  # Append full training cost
+
+        # Validation cost (without regularization)
+        val_output = model.forward_prop(X_val_norm, ACTIVATION_FUNCTION)
+        val_cost = Cost_func(val_output, Y_val_norm, "MAPE")
+        val_costs.append(val_cost)
+
+        # Print progress every PRINT epochs
+        if epoch % PRINT == 0:
+            print(f"Epoch {epoch}/{EPOCHS} - Cost: {train_cost}, Val Cost: {val_cost}")
+
+        # Check if the validation cost improved
+        if val_cost < best_val_cost:
+            best_val_cost = val_cost
+            wait = 0
+        else:
+            wait += 1
+
+        # Early stopping with patience
+        if wait >= PATIENCE:
+            print(f"Early stopping at epoch {epoch}")
+            best_epoch = epoch
+            break
 
         # Shuffle training data at the start of each epoch
         indices = np.arange(train_size)
@@ -289,8 +401,54 @@ def main():
     plt.ylabel("Cost (Log Scale)")
     plt.yscale("log")  # Set y-axis to log scale
     plt.legend()
+    plt.title("Val_vs_Train_cost_with_early_stop")
     plt.show()
-    plt.savefig("Val_vs_Train_cost.png")
+    plt.savefig("Val_vs_Train_cost_with_early_stop(MAPE).png")
+
+    model = NeuralNetwork(ANN_MODEL)
+    costs = []  # To store training costs
+    val_costs = []  # To store validation costs
+
+    for epoch in range(best_epoch):
+        epoch_cost = 0
+        for j in range(0, train_size, BATCH_SIZE):
+            end = min(j + BATCH_SIZE, train_size)
+            X_batch = X_train_norm[:, j:end]
+            Y_batch = Y_train_norm[:, j:end]
+
+            # Forward and Backward Propagation
+            model.forward_prop(X_batch, ACTIVATION_FUNCTION)
+            batch_cost = model.backward_prop(
+                Y_batch, ACTIVATION_FUNCTION, COST_FUNCTION
+            )
+            epoch_cost += batch_cost
+
+        # Calculate full training cost for the entire epoch (not just batches)
+        train_output = model.forward_prop(X_train_norm, ACTIVATION_FUNCTION)
+        train_cost = Cost_func(train_output, Y_train_norm, COST_FUNCTION)
+        costs.append(train_cost)  # Append full training cost
+
+        # Validation cost (without regularization)
+        val_output = model.forward_prop(X_val_norm, ACTIVATION_FUNCTION)
+        val_cost = Cost_func(val_output, Y_val_norm, COST_FUNCTION)
+        val_costs.append(val_cost)
+
+        # Print progress every PRINT epochs
+        if epoch % PRINT == 0:
+            print(f"Epoch {epoch}/{EPOCHS} - Cost: {train_cost}, Val Cost: {val_cost}")
+
+        # Shuffle training data at the start of each epoch
+        indices = np.arange(train_size)
+        np.random.shuffle(indices)
+        X_train_norm = X_train_norm[:, indices]
+        Y_train_norm = Y_train_norm[:, indices]
+
+        # Update learning rate with decay
+        model.learning_rate = lr_schedule(epoch, LEARNING_RATE)
+
+    model.save_weights("final_weights.json")
+
+    print("Training completed. Weights saved to 'final_weights.json'")
 
 
 if __name__ == "__main__":
