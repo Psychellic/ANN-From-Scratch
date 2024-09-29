@@ -7,7 +7,7 @@ matplotlib.use("module://matplotlib-backend-kitty")
 import numpy as np
 
 PRINT = 250
-EPOCHS = 30000
+EPOCHS = 3000
 INPUT_SIZE = 1000
 VALIDATION_SIZE = 300
 TESTING_SIZE = 100
@@ -15,6 +15,7 @@ NORMALIZE_TO = 1
 ANN_MODEL = [1, 15, 15, 15, 1]
 BATCH_SIZE = 64
 ACTIVATION_FUNCTION = "tanh"
+OUTPUT_ACTIVATION = "linear"
 COST_FUNCTION = "MSE"
 LEARNING_RATE = 0.0005
 
@@ -23,6 +24,7 @@ BETA = 0.9
 BETA2 = 0.999
 EPSILON = 1e-8
 LAMBDA = 0.001
+DECAY_RATE = 0.001
 
 
 def Cal_Activation_func(X, func):
@@ -54,7 +56,8 @@ def Cost_func(X, Y, func):
 
 
 def lr_schedule(epoch, initial_lr):
-    return initial_lr * (0.04 ** (epoch // (EPOCHS // 3)))
+    # Continuous learning rate decay
+    return initial_lr / (1 + DECAY_RATE * epoch)
 
 
 class NeuralNetwork:
@@ -65,6 +68,7 @@ class NeuralNetwork:
         self.biases = []
         self.optimizer = OPTIMIZER
         self.learning_rate = LEARNING_RATE
+        self.output_activation = OUTPUT_ACTIVATION
         self.beta = BETA
         self.beta2 = BETA2
         self.epsilon = EPSILON
@@ -72,6 +76,7 @@ class NeuralNetwork:
         self.t = 0
 
         for i in range(self.num_layers - 1):
+            # Xavier/Glorot initialization
             limit = np.sqrt(6 / (self.architecture[i] + self.architecture[i + 1]))
             self.weights.append(
                 np.random.uniform(
@@ -85,14 +90,14 @@ class NeuralNetwork:
         self.s_weights = [np.zeros_like(w) for w in self.weights]
         self.s_biases = [np.zeros_like(b) for b in self.biases]
 
-    def forward_prop(self, X, activation_func):
+    def forward_prop(self, X, hidden_activation):
         self.activation = [X]
         for i in range(self.num_layers - 1):
             Z = np.dot(self.weights[i], self.activation[-1]) + self.biases[i]
-            if i == self.num_layers - 2:
-                A = Z
+            if i == self.num_layers - 2:  # Last layer (output layer)
+                A = Cal_Activation_func(Z, self.output_activation)
             else:
-                A = Cal_Activation_func(Z, activation_func)
+                A = Cal_Activation_func(Z, hidden_activation)
             self.activation.append(A)
         return self.activation[-1]
 
@@ -218,6 +223,11 @@ def main():
     # Batch training
     for i in range(EPOCHS):
         epoch_cost = 0
+        indices = np.arange(INPUT_SIZE)
+        np.random.shuffle(indices)
+        X_input_normalized = X_input_normalized[:, indices]
+        Y_output_normalized = Y_output_normalized[:, indices]
+
         for j in range(0, INPUT_SIZE, BATCH_SIZE):
             end = min(j + BATCH_SIZE, INPUT_SIZE)
             X_batch = X_input_normalized[:, j:end]
@@ -230,13 +240,14 @@ def main():
             batch_cost = ann.backward_prop(Y_batch, ACTIVATION_FUNCTION, COST_FUNCTION)
             epoch_cost += batch_cost
 
-            ann.learning_rate = lr_schedule(i, LEARNING_RATE)
-
-        epoch_cost /= INPUT_SIZE // BATCH_SIZE
+        train_cost = ann.forward_prop(X_input_normalized, ACTIVATION_FUNCTION)
+        epoch_cost = Cost_func(train_cost, Y_output_normalized, COST_FUNCTION)
         costs.append(epoch_cost)
 
         if i % PRINT == 0:
             print(f"EPOCH {i}, Cost function = {epoch_cost}")
+
+        ann.learning_rate = lr_schedule(i, LEARNING_RATE)
 
     plt.figure(figsize=(10, 6))
     plt.plot(range(EPOCHS), costs)
@@ -286,6 +297,35 @@ def main():
     plt.savefig("sin_wave_with_prediction.png")
     print("Plot saved as 'sin_wave_with_prediction.png'")
     plt.show()
+
+    # Calculate actual sin values for the validation set
+    VALIDATION_set_actual = np.sin(VALIDATION_set_denorm)
+
+    # Calculate R2 score
+    from sklearn.metrics import r2_score
+
+    r2 = r2_score(VALIDATION_set_actual, val_forward_denorm)
+
+    # Create R2 scatter plot
+    plt.figure(figsize=(10, 10))
+    plt.scatter(VALIDATION_set_actual, val_forward_denorm, color="blue", alpha=0.6)
+    plt.plot(
+        [VALIDATION_set_actual.min(), VALIDATION_set_actual.max()],
+        [VALIDATION_set_actual.min(), VALIDATION_set_actual.max()],
+        "r--",
+        lw=2,
+    )
+    plt.title(f"R2 Score: {r2:.4f}")
+    plt.xlabel("Actual Values")
+    plt.ylabel("Predicted Values")
+    plt.grid(True)
+    plt.axis("equal")
+    plt.tight_layout()
+    plt.savefig("r2_scatter_plot.png")
+    print("R2 scatter plot saved as 'r2_scatter_plot.png'")
+    plt.show()
+
+    print(f"R2 Score: {r2:.4f}")
 
 
 if __name__ == "__main__":

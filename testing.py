@@ -1,5 +1,9 @@
 import json
 
+import matplotlib
+
+matplotlib.use("module://matplotlib-backend-kitty")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -51,6 +55,52 @@ def calculate_mape(actual, predicted, epsilon=0.001):
     return mape
 
 
+def calculate_r_squared(actual, predicted):
+    ssr = np.sum((actual - predicted) ** 2)
+    sst = np.sum((actual - np.mean(actual)) ** 2)
+    r_squared = 1 - (ssr / sst)
+    return r_squared
+
+
+def plot_r_squared_scatter(
+    Y_val, Y_val_pred, Y_test, Y_test_pred, r_squared_val, r_squared_test
+):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    # Validation set scatter plot
+    ax1.scatter(Y_val, Y_val_pred, alpha=0.5)
+    ax1.plot([Y_val.min(), Y_val.max()], [Y_val.min(), Y_val.max()], "r--", lw=2)
+    ax1.set_xlabel("Actual Values")
+    ax1.set_ylabel("Predicted Values")
+    ax1.set_title(f"Validation Set (R² = {r_squared_val:.4f})")
+    ax1.text(
+        0.05,
+        0.95,
+        f"R² = {r_squared_val:.4f}",
+        transform=ax1.transAxes,
+        verticalalignment="top",
+    )
+
+    # Test set scatter plot
+    ax2.scatter(Y_test, Y_test_pred, alpha=0.5)
+    ax2.plot([Y_test.min(), Y_test.max()], [Y_test.min(), Y_test.max()], "r--", lw=2)
+    ax2.set_xlabel("Actual Values")
+    ax2.set_ylabel("Predicted Values")
+    ax2.set_title(f"Test Set (R² = {r_squared_test:.4f})")
+    ax2.text(
+        0.05,
+        0.95,
+        f"R² = {r_squared_test:.4f}",
+        transform=ax2.transAxes,
+        verticalalignment="top",
+    )
+
+    plt.tight_layout()
+    plt.savefig("r_squared_scatter_plot.png")
+    plt.show()
+    plt.close()
+
+
 def main():
     # Load saved datasets and normalization parameters
     with np.load("datasets.npz") as data:
@@ -88,12 +138,29 @@ def main():
     mape_val = calculate_mape(Y_val.flatten(), Y_val_pred.flatten())
     mape_test = calculate_mape(Y_test.flatten(), Y_test_pred.flatten())
 
+    # Calculate R-squared
+    r_squared_val = calculate_r_squared(Y_val.flatten(), Y_val_pred.flatten())
+    r_squared_test = calculate_r_squared(Y_test.flatten(), Y_test_pred.flatten())
+
     print(f"Validation MAPE: {mape_val:.2f}%")
     print(f"Test MAPE: {mape_test:.2f}%")
+    print(f"Validation R-squared: {r_squared_val:.4f}")
+    print(f"Test R-squared: {r_squared_test:.4f}")
 
     # Calculate RMS error for test data
     rms_test = np.sqrt(np.mean((Y_test - Y_test_pred) ** 2))
     print(f"Test RMS Error: {rms_test:.4f}")
+
+    # Plot and save R-squared scatter plot
+    plot_r_squared_scatter(
+        Y_val.flatten(),
+        Y_val_pred.flatten(),
+        Y_test.flatten(),
+        Y_test_pred.flatten(),
+        r_squared_val,
+        r_squared_test,
+    )
+    print("R-squared scatter plot saved as 'r_squared_scatter_plot.png'")
 
 
 if __name__ == "__main__":
