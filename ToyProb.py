@@ -2,28 +2,30 @@ import math
 
 import matplotlib
 import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score
 
 matplotlib.use("module://matplotlib-backend-kitty")
 import numpy as np
 
+ANN_MODEL = [1, 100, 1]
+BATCH_SIZE = 64
+ACTIVATION_FUNCTION = "tanh"
+OUTPUT_ACTIVATION = "linear"
+LEARNING_RATE = 0.0005
+LAMBDA = 0
+
+COST_FUNCTION = "MSE"
 PRINT = 250
-EPOCHS = 3000
+EPOCHS = 2000
 INPUT_SIZE = 1000
 VALIDATION_SIZE = 300
 TESTING_SIZE = 100
 NORMALIZE_TO = 1
-ANN_MODEL = [1, 15, 15, 15, 1]
-BATCH_SIZE = 64
-ACTIVATION_FUNCTION = "tanh"
-OUTPUT_ACTIVATION = "linear"
-COST_FUNCTION = "MSE"
-LEARNING_RATE = 0.0005
 
 OPTIMIZER = "rmsprop"
 BETA = 0.9
 BETA2 = 0.999
 EPSILON = 1e-8
-LAMBDA = 0.001
 DECAY_RATE = 0.001
 
 
@@ -58,6 +60,12 @@ def Cost_func(X, Y, func):
 def lr_schedule(epoch, initial_lr):
     # Continuous learning rate decay
     return initial_lr / (1 + DECAY_RATE * epoch)
+
+
+def calculate_mape(actual, predicted, epsilon=0.001):
+    n = len(actual)
+    mape = (100 / n) * np.sum(np.abs((actual - predicted) / (np.abs(actual) + epsilon)))
+    return mape
 
 
 class NeuralNetwork:
@@ -255,9 +263,28 @@ def main():
     plt.xlabel("Epoch")
     plt.ylabel("Cost")
     plt.grid(True)
+
+    # Find the minimum cost and its corresponding epoch
+    min_cost = min(costs)
+    min_cost_epoch = costs.index(min_cost)
+
+    # Annotate the minimum point
+    plt.annotate(
+        f"Min: {min_cost:.6f}",
+        xy=(min_cost_epoch, min_cost),
+        xytext=(min_cost_epoch + 100, min_cost + 0.1),
+        arrowprops=dict(facecolor="black", shrink=0.05),
+        fontsize=10,
+        backgroundcolor="white",
+    )
+
+    # Plot a point at the minimum
+    plt.plot(min_cost_epoch, min_cost, "ro")
+
     plt.savefig("cost_over_epochs.png")
     plt.show()
-    print("Plot saved as 'cost_over_epochs.png'")
+    print(f"Plot saved as 'cost_over_epochs.png'")
+    print(f"Minimum cost: {min_cost:.6f} at epoch {min_cost_epoch}")
 
     val_forward = ann.forward_prop(VALIDATION_set_normalized, ACTIVATION_FUNCTION)
 
@@ -302,9 +329,10 @@ def main():
     VALIDATION_set_actual = np.sin(VALIDATION_set_denorm)
 
     # Calculate R2 score
-    from sklearn.metrics import r2_score
-
     r2 = r2_score(VALIDATION_set_actual, val_forward_denorm)
+
+    # Calculate MAPE using the custom function
+    mape = calculate_mape(VALIDATION_set_actual, val_forward_denorm)
 
     # Create R2 scatter plot
     plt.figure(figsize=(10, 10))
@@ -315,7 +343,7 @@ def main():
         "r--",
         lw=2,
     )
-    plt.title(f"R2 Score: {r2:.4f}")
+    plt.title(f"R2 Score: {r2:.4f}, MAPE: {mape:.2f}%")
     plt.xlabel("Actual Values")
     plt.ylabel("Predicted Values")
     plt.grid(True)
@@ -326,6 +354,7 @@ def main():
     plt.show()
 
     print(f"R2 Score: {r2:.4f}")
+    print(f"MAPE: {mape:.2f}%")
 
 
 if __name__ == "__main__":

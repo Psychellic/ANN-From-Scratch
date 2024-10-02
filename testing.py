@@ -8,16 +8,19 @@ import numpy as np
 import pandas as pd
 
 # Constants
-ANN_MODEL = [4, 10, 10, 10, 1]
+ANN_MODEL = [4, 45, 45, 45, 1]
 NORMALIZE_TO = 1
 ACTIVATION_FUNCTION = "relu"
+OUTPUT_ACTIVATION = "tanh"
 
 
 def Cal_Activation_func(X, func):
     if func == "relu":
         return np.maximum(0, X)
     elif func == "logistic":
-        return 1 / (1 + np.exp(-X))
+        clip_value = 709  # log(np.finfo(np.float64).max)
+        X_clipped = np.clip(X, -clip_value, clip_value)
+        return 1 / (1 + np.exp(-X_clipped))
     elif func == "tanh":
         return np.tanh(X)
     elif func == "linear":
@@ -30,6 +33,7 @@ class NeuralNetwork:
         self.num_layers = len(architecture)
         self.weights = []
         self.biases = []
+        self.output_activation = OUTPUT_ACTIVATION
 
     def load_weights(self, filename):
         with open(filename, "r") as f:
@@ -37,14 +41,14 @@ class NeuralNetwork:
         self.weights = [np.array(w) for w in weights_data["weights"]]
         self.biases = [np.array(b) for b in weights_data["biases"]]
 
-    def forward_prop(self, X, activation_func):
+    def forward_prop(self, X, hidden_activation):
         self.activation = [X]
         for i in range(self.num_layers - 1):
             Z = np.dot(self.weights[i], self.activation[-1]) + self.biases[i]
             if i == self.num_layers - 2:  # Last layer (output layer)
-                A = Z  # Linear activation for regression
+                A = Cal_Activation_func(Z, self.output_activation)
             else:
-                A = Cal_Activation_func(Z, activation_func)
+                A = Cal_Activation_func(Z, hidden_activation)
             self.activation.append(A)
         return self.activation[-1]
 
